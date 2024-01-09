@@ -49,9 +49,13 @@ public class Player {
     };
 
     public Player() {
-        String[][] queue = ;
+        String[][] queue = { // Example table
+                {"name1",   "album1",   "artist1",  "year1",    "length1"   },
+                {"name2",   "album2",   "artist3",  "year3",    "length3"   },
+                {"...",     "...",      "...",      "...",      "..."       }
+        };
         EventQueue.invokeLater(() -> window = new PlayerWindow(
-                ,
+                "Player", // Placeholder title
                 queue,
                 buttonListenerPlayNow,
                 buttonListenerRemove,
