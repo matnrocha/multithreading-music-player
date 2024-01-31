@@ -63,6 +63,8 @@ public class Player {
             songStopped.signal();
             lock.unlock();
 
+            stopSong();
+
         } catch (FileNotFoundException | JavaLayerException | InterruptedException e) {
             throw new RuntimeException(e);
         }
