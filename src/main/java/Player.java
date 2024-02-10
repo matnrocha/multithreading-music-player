@@ -30,10 +30,9 @@ public class Player {
 
     private PlayerWindow window;
     private Playlist playlist;
-    private int currentFrame = 0;
+    private int currentFrame;
     private Song currentSong;
-    private boolean playing;
-    private boolean paused;
+
     private final Lock
             lockPaused = new ReentrantLock(),
             lockStopped = new ReentrantLock();
@@ -64,10 +63,14 @@ public class Player {
                     songPaused.await();             //thread waits to be unpaused
                     lockPaused.unlock();
                 }
+
                 if(state == SongState.PAUSED || !playNextFrame()) {
                     songToStop();
                     break;
                 }
+
+                if(state != SongState.STOPPED) updateTrackInfo();
+
             }
 
             lockStopped.lock();
@@ -81,6 +84,29 @@ public class Player {
     }
 
     /**
+     * updates the info and current time of the track
+     */
+    private void updateTrackInfo() {
+        switch(state) {
+            case PLAYING:
+                currentFrame++;
+
+                window.setPlayingSongInfo(currentSong.getTitle(), currentSong.getAlbum(), currentSong.getArtist());
+                int msPerFrame = (int) currentSong.getMsPerFrame();
+                int totalFrames = currentSong.getNumFrames();
+                int currentTime = currentFrame * msPerFrame;
+                int totalTime = (int) currentSong.getMsLength();
+
+                window.setTime(currentTime, totalTime);
+                break;
+            case STOPPED:
+                EventQueue.invokeLater(() -> window.resetMiniPlayer());
+                break;
+        }
+
+    }
+
+    /**
      * Set device for new Track
      */
     private void setTrack() {
@@ -89,16 +115,18 @@ public class Player {
         } catch (FileNotFoundException | JavaLayerException e) {
             throw new RuntimeException(e);
         }
+
+        currentFrame = 0;
     }
 
-    private void songToPlay() throws InterruptedException {
+    private void songPlayNow() throws InterruptedException {
 
         switch(state) {
             case PLAYING:
                 state = SongState.STOPPED;
 
                 lockStopped.lock();
-                songStopped.await();
+                songStopped.await();        // waits for the previous thread to stop
                 lockStopped.unlock();
                 break;
             case PAUSED:
@@ -113,7 +141,7 @@ public class Player {
                 lockPaused.unlock();
 
                 lockStopped.lock();
-                songStopped.await();
+                songStopped.await();        // waits for the previous thread to stop
                 lockStopped.unlock();
                 break;
             case STOPPED:
@@ -121,9 +149,7 @@ public class Player {
                 break;
         }
 
-
-
-        new Thread(this::trackThread).start();
+        new Thread(this::trackThread).start();      //starts the new thread
 
     }
 
@@ -155,20 +181,22 @@ public class Player {
 
         switch(state) {
             case PLAYING:
-                EventQueue.invokeLater(() -> window.resetMiniPlayer());
+                System.out.println("parou");
+
+                state = SongState.STOPPED;
+                updateTrackInfo();
                 break;
             case PAUSED:
-                //
+                state = SongState.STOPPED;
+                updateTrackInfo();
                 break;
             case STOPPED:
                 //
                 break;
         }
 
-        state = SongState.STOPPED;
+
     }
-
-
 
 
     /** Closes the bit stream and the audio device */
@@ -205,7 +233,7 @@ public class Player {
         });
 
         try {
-            songToPlay();
+            songPlayNow();
         } catch (InterruptedException ex) {
             throw new RuntimeException(ex);
         }
