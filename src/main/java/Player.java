@@ -34,41 +34,143 @@ public class Player {
     private Song currentSong;
     private boolean playing;
     private boolean paused;
-    private final Lock lock = new ReentrantLock();
-    private final Condition songStopped = lock.newCondition();
-    private final Condition songPaused = lock.newCondition();
+    private final Lock
+            lockPaused = new ReentrantLock(),
+            lockStopped = new ReentrantLock();
+
+    private final Condition
+            songStopped = lockStopped.newCondition(),
+            songPaused = lockPaused.newCondition();
+
+    private SongState state;
 
     /** Each new track played is instantiated as a Thread object that uses this method call as parameter.
      *  When a new track thread starts, it will wait for the previous track to stop and signal the condition.
      */
+
+     private enum SongState {
+        PLAYING,
+        PAUSED,
+        STOPPED;
+    }
     private void trackThread() {
-        playing = true;
-        paused = false;
-        boolean EOF = false;
-        if (decoder != null) {
-            closeBitStream();
-        }
+        state = SongState.PLAYING;
+        setTrack();
+
         try {
-            createBitStream();
-            while (playing && !EOF) {
-                if(paused) {
-                    lock.lock();
+            while (state != SongState.STOPPED) {
+                while (state == SongState.PAUSED) {
+                    lockPaused.lock();
                     songPaused.await();             //thread waits to be unpaused
-                    lock.unlock();
+                    lockPaused.unlock();
                 }
-                EOF = !playNextFrame();
+                if(state == SongState.PAUSED || !playNextFrame()) {
+                    songToStop();
+                    break;
+                }
             }
 
-            lock.lock();
+            lockStopped.lock();
             songStopped.signal();
-            lock.unlock();
+            closeBitStream();
+            lockStopped.unlock();
 
-            stopSong();
-
-        } catch (FileNotFoundException | JavaLayerException | InterruptedException e) {
+        } catch (JavaLayerException | InterruptedException e) {
             throw new RuntimeException(e);
         }
     }
+
+    /**
+     * Set device for new Track
+     */
+    private void setTrack() {
+        try {
+            createBitStream();
+        } catch (FileNotFoundException | JavaLayerException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private void songToPlay() throws InterruptedException {
+
+        switch(state) {
+            case PLAYING:
+                state = SongState.STOPPED;
+
+                lockStopped.lock();
+                songStopped.await();
+                lockStopped.unlock();
+                break;
+            case PAUSED:
+                EventQueue.invokeLater(() -> {
+                    window.setPlayPauseButtonIcon(1);
+                });
+
+                state = SongState.STOPPED;
+
+                lockPaused.lock();
+                songPaused.signal();        //wakes trackThread
+                lockPaused.unlock();
+
+                lockStopped.lock();
+                songStopped.await();
+                lockStopped.unlock();
+                break;
+            case STOPPED:
+                //
+                break;
+        }
+
+
+
+        new Thread(this::trackThread).start();
+
+    }
+
+    private void songPlayPause() {
+        switch(state) {
+            case PLAYING:
+                state = SongState.PAUSED;
+                EventQueue.invokeLater(() -> {
+                    window.setPlayPauseButtonIcon(0);
+                });
+                break;
+            case PAUSED:
+                EventQueue.invokeLater(() -> {
+                    window.setPlayPauseButtonIcon(1);
+                });
+
+                lockPaused.lock();
+                songPaused.signal();        //wakes trackThread
+                lockPaused.unlock();
+
+                state = SongState.PLAYING;
+                break;
+            case STOPPED:
+                break;
+        }
+    }
+
+    private void songToStop() {
+
+        switch(state) {
+            case PLAYING:
+                EventQueue.invokeLater(() -> window.resetMiniPlayer());
+                break;
+            case PAUSED:
+                //
+                break;
+            case STOPPED:
+                //
+                break;
+        }
+
+        state = SongState.STOPPED;
+    }
+
+
+
+
     /** Closes the bit stream and the audio device */
     private void closeBitStream(){
         try{
@@ -90,40 +192,28 @@ public class Player {
         bitstream = new Bitstream(currentSong.getBufferedInputStream());
     }
 
-    /** Stop any song from playing and resets the GUI
-     *
-     */
-    private void stopSong() {
-        playing = false;
-        EventQueue.invokeLater(() -> window.resetMiniPlayer());
-    }
 
     private final ActionListener buttonListenerPlayNow = e -> new Thread(() ->{
         int index = window.getSelectedSongIndex();
         playlist.setCurrentIndex(index);
         currentSong = playlist.get(index);
+
         EventQueue.invokeLater(() -> {
             window.setEnabledStopButton(true);
             window.setEnabledPlayPauseButton(true);
             window.setPlayPauseButtonIcon(window.BUTTON_ICON_PAUSE);
         });
-        lock.lock();
+
         try {
-            if (playing) {
-                playing = false;       // Signals to the previous thread to stop reproduction;
-                songStopped.await();   // Then waits for it to stop;
-            }
+            songToPlay();
         } catch (InterruptedException ex) {
             throw new RuntimeException(ex);
-        } finally {
-            lock.unlock();
         }
-        new Thread(this::trackThread).start();
 
     }).start();
     private final ActionListener buttonListenerRemove = e -> new Thread(() -> {
         int index = window.getSelectedSongIndex();
-        if (index == playlist.getCurrentIndex()) stopSong();
+        if (index == playlist.getCurrentIndex()) songToStop();
         playlist.remove(index);
         updateWindow();
     }).start();
@@ -132,24 +222,8 @@ public class Player {
         playlist.add(newSong);
         updateWindow();
     }).start();
-    private final ActionListener buttonListenerPlayPause = e -> new Thread(() -> {
-        paused = !paused;
-
-        if(paused) {
-            EventQueue.invokeLater(() -> {
-                window.setPlayPauseButtonIcon(0);
-            });
-        } else {
-            EventQueue.invokeLater(() -> {
-                window.setPlayPauseButtonIcon(1);
-            });
-
-            lock.lock();
-            songPaused.signal();        //wakes trackThread
-            lock.unlock();
-        }
-    }).start();
-    private final ActionListener buttonListenerStop = e -> new Thread(this::stopSong).start();
+    private final ActionListener buttonListenerPlayPause = e -> new Thread(this::songPlayPause).start();
+    private final ActionListener buttonListenerStop = e -> new Thread(this::songToStop).start();
     private final ActionListener buttonListenerNext = e -> {};
     private final ActionListener buttonListenerPrevious = e -> {};
     private final ActionListener buttonListenerShuffle = e -> {};
@@ -173,6 +247,7 @@ public class Player {
     }
 
     public Player() {
+        this.state = SongState.STOPPED;
         this.playlist = new Playlist();
 
         try {
