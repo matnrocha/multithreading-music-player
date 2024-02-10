@@ -181,8 +181,6 @@ public class Player {
 
         switch(state) {
             case PLAYING:
-                System.out.println("parou");
-
                 state = SongState.STOPPED;
                 updateTrackInfo();
                 break;
