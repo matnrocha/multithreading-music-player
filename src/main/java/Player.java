@@ -9,6 +9,7 @@ import java.awt.*;
 import java.awt.event.ActionListener;
 import java.awt.event.MouseEvent;
 import java.io.FileNotFoundException;
+import java.util.Objects;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -54,7 +55,10 @@ public class Player {
     }
     private void trackThread() {
         state = SongState.PLAYING;
+        System.out.println(state);
+        System.out.println(currentSong);
         setTrack();
+        updateCentralButtons();
 
         try {
             while (state != SongState.STOPPED) {
@@ -65,7 +69,12 @@ public class Player {
                 }
 
                 if(state == SongState.PAUSED || !playNextFrame()) {
-                    songToStop();
+                    state = SongState.STOPPED;
+                    if(!playNextFrame() && playlist.hasNext()) {
+                        playNext();
+                    } else {
+                        songToStop();
+                    }
                     break;
                 }
 
@@ -98,12 +107,39 @@ public class Player {
                 int totalTime = (int) currentSong.getMsLength();
 
                 window.setTime(currentTime, totalTime);
+                updateButtonsNextPrevious();
+
                 break;
             case STOPPED:
                 EventQueue.invokeLater(() -> window.resetMiniPlayer());
                 break;
         }
 
+
+
+
+    }
+
+    /**
+     * Update buttons NextSong and PreviousSong
+     */
+    private void updateButtonsNextPrevious(){
+        EventQueue.invokeLater(() -> {
+            window.setEnabledNextButton(playlist.hasNext());
+            window.setEnabledPreviousButton(playlist.hasPrevious());
+        });
+
+    }
+
+    /**
+     * Update Stop and Play/Pause buttons when a song is started
+     */
+    private void updateCentralButtons() {
+        EventQueue.invokeLater(() -> {
+            window.setEnabledStopButton(true);
+            window.setEnabledPlayPauseButton(true);
+            window.setPlayPauseButtonIcon(window.BUTTON_ICON_PAUSE);
+        });
     }
 
     /**
@@ -145,7 +181,7 @@ public class Player {
                 lockStopped.unlock();
                 break;
             case STOPPED:
-                //
+                System.out.println("aqui6");
                 break;
         }
 
@@ -189,7 +225,7 @@ public class Player {
                 updateTrackInfo();
                 break;
             case STOPPED:
-                //
+                updateTrackInfo();
                 break;
         }
 
@@ -218,17 +254,43 @@ public class Player {
         bitstream = new Bitstream(currentSong.getBufferedInputStream());
     }
 
-
-    private final ActionListener buttonListenerPlayNow = e -> new Thread(() ->{
-        int index = window.getSelectedSongIndex();
+    /**
+     *
+     * @param index new index
+     */
+    private void changeCurrentSong(int index){
         playlist.setCurrentIndex(index);
         currentSong = playlist.get(index);
+    }
 
-        EventQueue.invokeLater(() -> {
-            window.setEnabledStopButton(true);
-            window.setEnabledPlayPauseButton(true);
-            window.setPlayPauseButtonIcon(window.BUTTON_ICON_PAUSE);
-        });
+    private void playNext(){
+
+        changeCurrentSong(playlist.getNextIndex());     //puts the next song in place to start
+
+        try {
+            songPlayNow();
+            System.out.println("aqui5");
+        } catch (InterruptedException ex) {
+            throw new RuntimeException(ex);
+        }
+    }
+
+    private void playPrevious() {
+
+        changeCurrentSong(playlist.getPreviousIndex());     //puts the previous song in place to start
+
+        try {
+            songPlayNow();
+        } catch (InterruptedException ex) {
+            throw new RuntimeException(ex);
+        }
+    }
+
+    private final ActionListener buttonListenerPlayNow = e -> new Thread(() ->{
+        changeCurrentSong(window.getSelectedSongIndex());
+
+        updateCentralButtons();
+        updateButtonsNextPrevious();
 
         try {
             songPlayNow();
@@ -239,7 +301,10 @@ public class Player {
     }).start();
     private final ActionListener buttonListenerRemove = e -> new Thread(() -> {
         int index = window.getSelectedSongIndex();
-        if (index == playlist.getCurrentIndex()) songToStop();
+        if(Objects.equals(currentSong.getUuid(), window.getSelectedSongID())) {
+            songToStop();
+        }
+
         playlist.remove(index);
         updateWindow();
     }).start();
@@ -250,8 +315,8 @@ public class Player {
     }).start();
     private final ActionListener buttonListenerPlayPause = e -> new Thread(this::songPlayPause).start();
     private final ActionListener buttonListenerStop = e -> new Thread(this::songToStop).start();
-    private final ActionListener buttonListenerNext = e -> {};
-    private final ActionListener buttonListenerPrevious = e -> {};
+    private final ActionListener buttonListenerNext = e -> new Thread(this::playNext).start();
+    private final ActionListener buttonListenerPrevious = e -> new Thread(this::playPrevious).start();
     private final ActionListener buttonListenerShuffle = e -> {};
     private final ActionListener buttonListenerLoop = e -> {};
     private final MouseInputAdapter scrubberMouseInputAdapter = new MouseInputAdapter() {
