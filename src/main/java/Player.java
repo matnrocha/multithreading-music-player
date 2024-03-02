@@ -1,6 +1,7 @@
 import javazoom.jl.decoder.*;
 import javazoom.jl.player.AudioDevice;
 import javazoom.jl.player.FactoryRegistry;
+import jdk.jfr.Event;
 import support.PlayerWindow;
 import support.Playlist;
 import support.Song;
@@ -32,60 +33,62 @@ public class Player {
     private PlayerWindow window;
     private Playlist playlist;
     private int currentFrame;
+    private float scrubberValue;
     private Song currentSong;
 
     private final Lock
             lockPaused = new ReentrantLock(),
-            lockStopped = new ReentrantLock();
+            trackTimeLock = new ReentrantLock(),
+            lockPlaying = new ReentrantLock();
 
     private final Condition
-            songStopped = lockStopped.newCondition(),
-            songPaused = lockPaused.newCondition();
+            threadUnpaused = lockPaused.newCondition();
 
     private SongState state;
 
-    /** Each new track played is instantiated as a Thread object that uses this method call as parameter.
-     *  When a new track thread starts, it will wait for the previous track to stop and signal the condition.
-     */
+    private final Thread TrackThread = new Thread(this::PlayTrack);
 
      private enum SongState {
         PLAYING,
         PAUSED,
         STOPPED;
     }
-    private void trackThread() {
-        state = SongState.PLAYING;
-        System.out.println(state);
-        System.out.println(currentSong);
-        setTrack();
+
+    /** Each new track played is instantiated as a Thread object that uses this method call as parameter.
+     *  When a new track thread starts, it will wait for the previous track to stop and signal the condition.
+     */
+    private void PlayTrack() {
+        //System.out.println(state);
         updateCentralButtons();
 
         try {
-            while (state != SongState.STOPPED) {
-                while (state == SongState.PAUSED) {
+            while (true) {
+                while (state != SongState.PLAYING) {
                     lockPaused.lock();
-                    songPaused.await();             //thread waits to be unpaused
+                    System.out.println("Track thread pausing");
+                    threadUnpaused.await();             //thread waits to be unpaused
+                    System.out.println("Track thread unpausing");
                     lockPaused.unlock();
                 }
-
-                if(state == SongState.PAUSED || !playNextFrame()) {
-                    state = SongState.STOPPED;
-                    if(!playNextFrame() && playlist.hasNext()) {
+                lockPlaying.lock();
+                boolean EOF = !playNextFrame();
+                lockPlaying.unlock();
+                if(EOF) {
+                    //state = SongState.STOPPED;
+                    if(playlist.hasNext()) {
                         playNext();
                     } else {
                         songToStop();
                     }
-                    break;
+                } else currentFrame++;
+                if(trackTimeLock.tryLock())
+                {
+                    updateTrackTime();
+                    trackTimeLock.unlock();
                 }
 
-                if(state != SongState.STOPPED) updateTrackInfo();
 
             }
-
-            lockStopped.lock();
-            songStopped.signal();
-            closeBitStream();
-            lockStopped.unlock();
 
         } catch (JavaLayerException | InterruptedException e) {
             throw new RuntimeException(e);
@@ -98,26 +101,26 @@ public class Player {
     private void updateTrackInfo() {
         switch(state) {
             case PLAYING:
-                currentFrame++;
-
-                window.setPlayingSongInfo(currentSong.getTitle(), currentSong.getAlbum(), currentSong.getArtist());
-                int msPerFrame = (int) currentSong.getMsPerFrame();
-                int totalFrames = currentSong.getNumFrames();
-                int currentTime = currentFrame * msPerFrame;
-                int totalTime = (int) currentSong.getMsLength();
-
-                window.setTime(currentTime, totalTime);
+                EventQueue.invokeLater(() -> {
+                    window.setPlayingSongInfo(
+                        currentSong.getTitle(),
+                        currentSong.getAlbum(),
+                        currentSong.getArtist());
+                });
                 updateButtonsNextPrevious();
 
                 break;
             case STOPPED:
-                EventQueue.invokeLater(() -> window.resetMiniPlayer());
+                EventQueue.invokeLater(() -> {
+                    window.setEnabledScrubber(false);
+                    window.resetMiniPlayer();
+                });
                 break;
         }
+    }
 
-
-
-
+    private void updateSongPanels() {
+        EventQueue.invokeLater(() -> window.setQueueList(playlist.getDisplayInfo()));
     }
 
     /**
@@ -151,87 +154,49 @@ public class Player {
         } catch (FileNotFoundException | JavaLayerException e) {
             throw new RuntimeException(e);
         }
-
         currentFrame = 0;
     }
 
-    private void songPlayNow() throws InterruptedException {
-
-        switch(state) {
-            case PLAYING:
-                state = SongState.STOPPED;
-
-                lockStopped.lock();
-                songStopped.await();        // waits for the previous thread to stop
-                lockStopped.unlock();
-                break;
-            case PAUSED:
-                EventQueue.invokeLater(() -> {
-                    window.setPlayPauseButtonIcon(1);
-                });
-
-                state = SongState.STOPPED;
-
-                lockPaused.lock();
-                songPaused.signal();        //wakes trackThread
-                lockPaused.unlock();
-
-                lockStopped.lock();
-                songStopped.await();        // waits for the previous thread to stop
-                lockStopped.unlock();
-                break;
-            case STOPPED:
-                System.out.println("aqui6");
-                break;
-        }
-
-        new Thread(this::trackThread).start();      //starts the new thread
+    private void updateTrackTime() {
+        EventQueue.invokeLater(() -> { window.setTime((int)(currentFrame * currentSong.getMsPerFrame()), (int)currentSong.getMsLength());});
 
     }
 
+    private void songPlayNow(int songIndex) throws InterruptedException {
+        if (state == SongState.STOPPED && !TrackThread.isAlive()) TrackThread.start();
+        changeCurrentSong(songIndex);
+        updateTrackInfo();
+        lockPlaying.lock();
+        if (bitstream != null) closeBitStream();
+        setTrack();
+        lockPlaying.unlock();
+        if (state != SongState.PLAYING) songPlayPause();
+        updateButtonsNextPrevious();
+        updateCentralButtons();
+        EventQueue.invokeLater(() -> window.setEnabledScrubber(true));
+    }
+
     private void songPlayPause() {
-        switch(state) {
-            case PLAYING:
-                state = SongState.PAUSED;
-                EventQueue.invokeLater(() -> {
-                    window.setPlayPauseButtonIcon(0);
-                });
-                break;
-            case PAUSED:
-                EventQueue.invokeLater(() -> {
-                    window.setPlayPauseButtonIcon(1);
-                });
-
-                lockPaused.lock();
-                songPaused.signal();        //wakes trackThread
-                lockPaused.unlock();
-
-                state = SongState.PLAYING;
-                break;
-            case STOPPED:
-                break;
+        if (state == SongState.PLAYING) {
+            System.out.println("changing track state to PAUSED");
+            state = SongState.PAUSED;
+            EventQueue.invokeLater(() -> window.setPlayPauseButtonIcon(window.BUTTON_ICON_PLAY));
+        } else {
+            lockPaused.lock();
+            System.out.println("Signaling unpause");
+            state = SongState.PLAYING;
+            threadUnpaused.signal();        //wakes trackThread
+            lockPaused.unlock();
+            EventQueue.invokeLater(() -> window.setPlayPauseButtonIcon(window.BUTTON_ICON_PAUSE));
         }
     }
 
     private void songToStop() {
-
-        switch(state) {
-            case PLAYING:
-                state = SongState.STOPPED;
-                updateTrackInfo();
-                break;
-            case PAUSED:
-                state = SongState.STOPPED;
-                updateTrackInfo();
-                break;
-            case STOPPED:
-                updateTrackInfo();
-                break;
-        }
-
-
+        state = SongState.STOPPED;
+        currentFrame = 0;
+        updateTrackTime();
+        updateTrackInfo();
     }
-
 
     /** Closes the bit stream and the audio device */
     private void closeBitStream(){
@@ -244,9 +209,6 @@ public class Player {
     }
 
     /**Create a new audio device as well as a new input stream
-     *
-     * @throws JavaLayerException
-     * @throws FileNotFoundException
      */
     private void createBitStream() throws JavaLayerException, FileNotFoundException {
         device = FactoryRegistry.systemRegistry().createAudioDevice();
@@ -264,41 +226,27 @@ public class Player {
     }
 
     private void playNext(){
-
-        changeCurrentSong(playlist.getNextIndex());     //puts the next song in place to start
-
         try {
-            songPlayNow();
-            System.out.println("aqui5");
+            songPlayNow(playlist.getNextIndex());
         } catch (InterruptedException ex) {
             throw new RuntimeException(ex);
         }
     }
 
     private void playPrevious() {
-
-        changeCurrentSong(playlist.getPreviousIndex());     //puts the previous song in place to start
-
         try {
-            songPlayNow();
+            songPlayNow(playlist.getPreviousIndex());
         } catch (InterruptedException ex) {
             throw new RuntimeException(ex);
         }
     }
-
-    private final ActionListener buttonListenerPlayNow = e -> new Thread(() ->{
-        changeCurrentSong(window.getSelectedSongIndex());
-
-        updateCentralButtons();
-        updateButtonsNextPrevious();
-
+    private final ActionListener buttonListenerPlayNow = e -> {
         try {
-            songPlayNow();
+            songPlayNow(window.getSelectedSongIndex());
         } catch (InterruptedException ex) {
             throw new RuntimeException(ex);
         }
-
-    }).start();
+    };
     private final ActionListener buttonListenerRemove = e -> new Thread(() -> {
         int index = window.getSelectedSongIndex();
         if(Objects.equals(currentSong.getUuid(), window.getSelectedSongID())) {
@@ -306,14 +254,16 @@ public class Player {
         }
 
         playlist.remove(index);
-        updateWindow();
+        updateSongPanels();
     }).start();
     private final ActionListener buttonListenerAddSong = e -> new Thread(() -> {
         Song newSong = window.openFileChooser();
-        playlist.add(newSong);
-        updateWindow();
+        if (newSong != null) playlist.add(newSong);
+        updateSongPanels();
     }).start();
-    private final ActionListener buttonListenerPlayPause = e -> new Thread(this::songPlayPause).start();
+    private final ActionListener buttonListenerPlayPause = e -> {
+        songPlayPause();
+    };
     private final ActionListener buttonListenerStop = e -> new Thread(this::songToStop).start();
     private final ActionListener buttonListenerNext = e -> new Thread(this::playNext).start();
     private final ActionListener buttonListenerPrevious = e -> new Thread(this::playPrevious).start();
@@ -322,20 +272,38 @@ public class Player {
     private final MouseInputAdapter scrubberMouseInputAdapter = new MouseInputAdapter() {
         @Override
         public void mouseReleased(MouseEvent e) {
+            trackTimeLock.unlock();
+            lockPlaying.lock();
+            try {
+                int frame = (int) (scrubberValue / currentSong.getMsPerFrame());
+                closeBitStream();
+                setTrack();
+                skipToFrame(frame);
+            } catch (JavaLayerException ex) {
+                throw new RuntimeException(ex);
+            } finally {
+                lockPlaying.unlock();
+            }
+            trackTimeLock.lock();
+            updateTrackTime();
+            trackTimeLock.unlock();
+
         }
 
         @Override
         public void mousePressed(MouseEvent e) {
+            trackTimeLock.lock();
+            scrubberValue = window.getScrubberValue();
         }
 
         @Override
         public void mouseDragged(MouseEvent e) {
+            scrubberValue = window.getScrubberValue();
+            EventQueue.invokeLater(() -> window.setTime(
+                    (int) scrubberValue,
+                    (int) currentSong.getMsLength()));
         }
     };
-
-    private void updateWindow() {
-        EventQueue.invokeLater(() -> window.setQueueList(playlist.getDisplayInfo()));
-    }
 
     public Player() {
         this.state = SongState.STOPPED;
