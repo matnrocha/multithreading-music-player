@@ -58,16 +58,14 @@ public class Player {
      *  When a new track thread starts, it will wait for the previous track to stop and signal the condition.
      */
     private void PlayTrack() {
-        //System.out.println(state);
+
         updateCentralButtons();
 
         try {
             while (true) {
                 while (state != SongState.PLAYING) {
                     lockPaused.lock();
-                    System.out.println("Track thread pausing");
                     threadUnpaused.await();             //thread waits to be unpaused
-                    System.out.println("Track thread unpausing");
                     lockPaused.unlock();
                 }
                 lockPlaying.lock();
@@ -178,12 +176,10 @@ public class Player {
 
     private void songPlayPause() {
         if (state == SongState.PLAYING) {
-            System.out.println("changing track state to PAUSED");
             state = SongState.PAUSED;
             EventQueue.invokeLater(() -> window.setPlayPauseButtonIcon(window.BUTTON_ICON_PLAY));
         } else {
             lockPaused.lock();
-            System.out.println("Signaling unpause");
             state = SongState.PLAYING;
             threadUnpaused.signal();        //wakes trackThread
             lockPaused.unlock();
@@ -217,7 +213,6 @@ public class Player {
     }
 
     /**
-     *
      * @param index new index
      */
     private void changeCurrentSong(int index){
