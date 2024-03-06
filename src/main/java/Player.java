@@ -58,9 +58,6 @@ public class Player {
      *  When a new track thread starts, it will wait for the previous track to stop and signal the condition.
      */
     private void PlayTrack() {
-
-        updateCentralButtons();
-
         try {
             while (true) {
                 while (state != SongState.PLAYING) {
@@ -68,24 +65,24 @@ public class Player {
                     threadUnpaused.await();             //thread waits to be unpaused
                     lockPaused.unlock();
                 }
+
                 lockPlaying.lock();
                 boolean EOF = !playNextFrame();
                 lockPlaying.unlock();
+
                 if(EOF) {
-                    //state = SongState.STOPPED;
                     if(playlist.hasNext()) {
                         playNext();
                     } else {
                         songToStop();
                     }
                 } else currentFrame++;
+
                 if(trackTimeLock.tryLock())
                 {
                     updateTrackTime();
                     trackTimeLock.unlock();
                 }
-
-
             }
 
         } catch (JavaLayerException | InterruptedException e) {
@@ -94,7 +91,7 @@ public class Player {
     }
 
     /**
-     * updates the info and current time of the track
+     * updates the info of the track
      */
     private void updateTrackInfo() {
         switch(state) {
@@ -143,6 +140,12 @@ public class Player {
         });
     }
 
+    private void updateTrackTime() {
+        EventQueue.invokeLater(() -> { window.setTime((int)(currentFrame * currentSong.getMsPerFrame()), (int)currentSong.getMsLength());});
+    }
+
+
+
     /**
      * Set device for new Track
      */
@@ -155,20 +158,20 @@ public class Player {
         currentFrame = 0;
     }
 
-    private void updateTrackTime() {
-        EventQueue.invokeLater(() -> { window.setTime((int)(currentFrame * currentSong.getMsPerFrame()), (int)currentSong.getMsLength());});
 
-    }
 
     private void songPlayNow(int songIndex) throws InterruptedException {
         if (state == SongState.STOPPED && !TrackThread.isAlive()) TrackThread.start();
         changeCurrentSong(songIndex);
         updateTrackInfo();
+
         lockPlaying.lock();
         if (bitstream != null) closeBitStream();
         setTrack();
         lockPlaying.unlock();
+
         if (state != SongState.PLAYING) songPlayPause();
+
         updateButtonsNextPrevious();
         updateCentralButtons();
         EventQueue.invokeLater(() -> window.setEnabledScrubber(true));
@@ -244,7 +247,7 @@ public class Player {
     };
     private final ActionListener buttonListenerRemove = e -> new Thread(() -> {
         int index = window.getSelectedSongIndex();
-        if(Objects.equals(currentSong.getUuid(), window.getSelectedSongID())) {
+        if(currentSong != null && Objects.equals(currentSong.getUuid(), window.getSelectedSongID())) {
             songToStop();
         }
 
