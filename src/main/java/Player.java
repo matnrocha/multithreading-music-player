@@ -78,7 +78,7 @@ public class Player {
                     }
                 } else currentFrame++;
 
-                if(trackTimeLock.tryLock())
+                if(trackTimeLock.tryLock() && state != SongState.STOPPED)
                 {
                     updateTrackTime();
                     trackTimeLock.unlock();
@@ -122,11 +122,12 @@ public class Player {
      * Update buttons NextSong and PreviousSong
      */
     private void updateButtonsNextPrevious(){
-        EventQueue.invokeLater(() -> {
-            window.setEnabledNextButton(playlist.hasNext());
-            window.setEnabledPreviousButton(playlist.hasPrevious());
-        });
-
+        if(state != SongState.STOPPED){
+            EventQueue.invokeLater(() -> {
+                window.setEnabledNextButton(playlist.hasNext());
+                window.setEnabledPreviousButton(playlist.hasPrevious());
+            });
+        }
     }
 
     /**
