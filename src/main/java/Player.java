@@ -254,11 +254,13 @@ public class Player {
 
         playlist.remove(index);
         updateSongPanels();
+        updateButtonsNextPrevious();
     }).start();
     private final ActionListener buttonListenerAddSong = e -> new Thread(() -> {
         Song newSong = window.openFileChooser();
         if (newSong != null) playlist.add(newSong);
         updateSongPanels();
+        updateButtonsNextPrevious();
     }).start();
     private final ActionListener buttonListenerPlayPause = e -> {
         songPlayPause();
