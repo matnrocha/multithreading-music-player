@@ -1,2 +1,1 @@
-[![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-24ddc0f5d75046c5622901739e7c5dd533143b0c8e959d652212380cedb1ea36.svg)](https://classroom.github.com/a/zuhSuhWp)
-# exercicio_concorrencia_2023.1
+This application is a university project developed as a solution to a music-player using multiple threads to handle concurrent tasks in Java.
